@@ -271,6 +271,9 @@ export async function startGateway() {
   // Allow token-only auth without device pairing — safe because the gateway is bound
   // to loopback and our wrapper enforces SETUP_PASSWORD + HTTPS externally
   config.gateway.controlUi.allowInsecureAuth = true;
+    // Allow host header origin fallback for Railway deployments where the public
+  // domain may not match allowedOrigins exactly (fixes gateway crash loop)
+  config.gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback = true;
   config.gateway.controlUi.dangerouslyDisableDeviceAuth = true;
 
   // Allow the Railway public domain as a WebSocket origin so the Control UI works
