@@ -1970,6 +1970,12 @@ export function getSetupPageHTML({ isConfigured, gatewayInfo, password, stateDir
               if (ef.optional) inp.setAttribute('data-optional', 'true');
               inp.placeholder = ef.placeholder || '';
               fg.appendChild(inp);
+              if (ef.hint) {
+                var hintEl = document.createElement('p');
+                hintEl.className = 'form-hint';
+                hintEl.textContent = ef.hint;
+                fg.appendChild(hintEl);
+              }
               container.appendChild(fg);
             }
             secretGroup.parentNode.insertBefore(container, secretGroup.nextSibling);

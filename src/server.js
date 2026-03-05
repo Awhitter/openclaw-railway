@@ -262,7 +262,7 @@ const AUTH_GROUPS = [
         secretOptional: true,
         extraFields: [
           { id: 'custom-base-url', label: 'Base URL', flag: '--custom-base-url', placeholder: 'https://api.example.com/v1' },
-          { id: 'custom-model-id', label: 'Model ID', flag: '--custom-model-id', placeholder: 'gpt-4o' },
+          { id: 'custom-model-id', label: 'Model ID', flag: '--custom-model-id', placeholder: 'openai/gpt-4o', hint: 'For Plano/litellm, use provider/model format (e.g. openai/gpt-4o, anthropic/claude-sonnet-4-5)' },
           { id: 'custom-provider-name', label: 'Provider Name', placeholder: 'e.g. Plano, LocalAI', optional: true, noFlag: true },
           { id: 'custom-context-window', label: 'Context Window', placeholder: '200000', optional: true, noFlag: true, type: 'number' }
         ]
