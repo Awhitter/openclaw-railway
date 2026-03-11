@@ -1769,6 +1769,15 @@ export function getSetupPageHTML({ isConfigured, gatewayInfo, password, stateDir
         return false;
       }
 
+      function isSecretOptional() {
+        if (selectedProviderIndex === null || selectedAuthChoice === null) return false;
+        var opts = authGroups[selectedProviderIndex].options;
+        for (var i = 0; i < opts.length; i++) {
+          if (opts[i].value === selectedAuthChoice) return !!(opts[i].secretOptional);
+        }
+        return false;
+      }
+
       window.validateAndGoToStep = function(n) {
         if (selectedProviderIndex === null) {
           showStep2Error(t('step2.err.noProvider'));
@@ -1778,7 +1787,7 @@ export function getSetupPageHTML({ isConfigured, gatewayInfo, password, stateDir
           showStep2Error(t('step2.err.noAuth'));
           return;
         }
-        if (selectedAuthChoice !== 'ollama' && !isNoSecretChoice()) {
+        if (selectedAuthChoice !== 'ollama' && !isNoSecretChoice() && !isSecretOptional()) {
           var secretVal = document.getElementById('secret-input').value.trim();
           if (!secretVal) {
             showStep2Error(t('step2.err.noKey'));
@@ -1788,7 +1797,7 @@ export function getSetupPageHTML({ isConfigured, gatewayInfo, password, stateDir
         // Validate extra fields if present
         var extraInputs = document.querySelectorAll('.extra-field-input');
         for (var k = 0; k < extraInputs.length; k++) {
-          if (!extraInputs[k].value.trim()) {
+          if (!extraInputs[k].value.trim() && extraInputs[k].getAttribute('data-optional') !== 'true') {
             showStep2Error(t('step2.err.missingFields'));
             return;
           }
@@ -1920,6 +1929,11 @@ export function getSetupPageHTML({ isConfigured, gatewayInfo, password, stateDir
           secretGroup.style.display = 'none';
         } else if (selectedAuthChoice !== null) {
           secretGroup.style.display = 'block';
+          // Update label to show "(optional)" when the API key is not required
+          var secretLabel = document.getElementById('secret-label');
+          if (secretLabel) {
+            secretLabel.textContent = isSecretOptional() ? t('step2.apiKey') + ' (optional)' : t('step2.apiKey');
+          }
           var group = authGroups[selectedProviderIndex];
           var link = providerHelpLinks[group.provider];
           // Build hint text safely using DOM methods
@@ -1947,14 +1961,21 @@ export function getSetupPageHTML({ isConfigured, gatewayInfo, password, stateDir
               fg.className = 'form-group';
               var lbl = document.createElement('label');
               lbl.className = 'form-label';
-              lbl.textContent = ef.label;
+              lbl.textContent = ef.label + (ef.optional ? ' (optional)' : '');
               fg.appendChild(lbl);
               var inp = document.createElement('input');
-              inp.type = 'text';
+              inp.type = ef.type || 'text';
               inp.className = 'form-input extra-field-input';
               inp.setAttribute('data-field-id', ef.id);
+              if (ef.optional) inp.setAttribute('data-optional', 'true');
               inp.placeholder = ef.placeholder || '';
               fg.appendChild(inp);
+              if (ef.hint) {
+                var hintEl = document.createElement('p');
+                hintEl.className = 'form-hint';
+                hintEl.textContent = ef.hint;
+                fg.appendChild(hintEl);
+              }
               container.appendChild(fg);
             }
             secretGroup.parentNode.insertBefore(container, secretGroup.nextSibling);

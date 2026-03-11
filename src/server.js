@@ -259,9 +259,12 @@ const AUTH_GROUPS = [
         value: 'custom-api-key',
         flag: ['--auth-choice', 'custom-api-key', '--custom-compatibility', 'openai'],
         secretFlag: '--custom-api-key',
+        secretOptional: true,
         extraFields: [
           { id: 'custom-base-url', label: 'Base URL', flag: '--custom-base-url', placeholder: 'https://api.example.com/v1' },
-          { id: 'custom-model-id', label: 'Model ID', flag: '--custom-model-id', placeholder: 'gpt-4o' }
+          { id: 'custom-model-id', label: 'Model ID', flag: '--custom-model-id', placeholder: 'openai/gpt-4o', hint: 'For Plano/litellm, use provider/model format (e.g. openai/gpt-4o, anthropic/claude-sonnet-4-5)' },
+          { id: 'custom-provider-name', label: 'Provider Name', placeholder: 'e.g. Plano, LocalAI', optional: true, noFlag: true },
+          { id: 'custom-context-window', label: 'Context Window', placeholder: '200000', optional: true, noFlag: true, type: 'number' }
         ]
       }
     ]
@@ -539,8 +542,11 @@ app.post('/onboard/api/run', authMiddleware, async (req, res) => {
     if (flag) {
       if (Array.isArray(flag)) {
         onboardArgs.push(...flag);
-        if (opt.secretFlag && authSecret) {
-          onboardArgs.push(opt.secretFlag, authSecret);
+        // For secretOptional providers (e.g. Plano), fall back to 'nokey' so the
+        // flag is always passed and onboard doesn't prompt interactively.
+        const secretVal = authSecret || (opt.secretOptional ? 'nokey' : null);
+        if (opt.secretFlag && secretVal) {
+          onboardArgs.push(opt.secretFlag, secretVal);
         }
       } else if (authSecret) {
         onboardArgs.push(flag, authSecret);
@@ -550,6 +556,7 @@ app.post('/onboard/api/run', authMiddleware, async (req, res) => {
     // Handle extra fields (e.g., Cloudflare account/gateway IDs)
     if (opt?.extraFields && extraFieldValues) {
       for (const field of opt.extraFields) {
+        if (field.noFlag) continue;
         const val = extraFieldValues[field.id];
         if (val && field.flag) {
           onboardArgs.push(field.flag, val);
@@ -573,6 +580,48 @@ app.post('/onboard/api/run', authMiddleware, async (req, res) => {
         return res.json({ success: false, logs });
       }
       logs.push('(Gateway verification skipped — gateway will be started next)');
+    }
+
+    // Patch custom provider fields that the CLI doesn't handle (provider name, context window)
+    // OpenClaw stores providers at config.models.providers.<key> with models as array of objects
+    const configFile = join(OPENCLAW_STATE_DIR, 'openclaw.json');
+    if (existsSync(configFile) && extraFieldValues) {
+      try {
+        const config = JSON.parse(readFileSync(configFile, 'utf8'));
+        const cfgProviders = config.models?.providers;
+        if (cfgProviders && typeof cfgProviders === 'object') {
+          for (const [key, providerEntry] of Object.entries(cfgProviders)) {
+            if (!providerEntry || !Array.isArray(providerEntry.models)) continue;
+            // Set contextWindow on individual model entries
+            const ctxVal = extraFieldValues['custom-context-window'];
+            if (ctxVal) {
+              const ctxNum = parseInt(ctxVal, 10);
+              for (const model of providerEntry.models) {
+                if (model && typeof model === 'object' && model.id) {
+                  model.contextWindow = ctxNum;
+                  logs.push(`Set contextWindow=${ctxNum} for model "${model.id}" in provider "${key}"`);
+                }
+              }
+            }
+            // Rename provider key if custom name provided
+            const newName = extraFieldValues['custom-provider-name']?.trim();
+            if (newName && newName !== key) {
+              cfgProviders[newName] = providerEntry;
+              delete cfgProviders[key];
+              logs.push(`Renamed provider "${key}" → "${newName}"`);
+              // Also update agents.defaults.model.primary if it references the old provider key
+              const primary = config.agents?.defaults?.model?.primary;
+              if (primary && primary.startsWith(key + '/')) {
+                config.agents.defaults.model.primary = newName + '/' + primary.slice(key.length + 1);
+                logs.push(`Updated primary model ref: ${primary} → ${config.agents.defaults.model.primary}`);
+              }
+            }
+          }
+          writeFileSync(configFile, JSON.stringify(config, null, 2));
+        }
+      } catch (e) {
+        logs.push(`Warning: failed to patch custom provider config: ${e.message}`);
+      }
     }
 
     // Install skill files to disk (downloads are independent of gateway state)
@@ -1238,7 +1287,9 @@ app.get('/lite/api/version', authMiddleware, async (req, res) => {
   // Check current running version
   try {
     const vResult = await runCmd('--version');
-    current = (vResult.stdout || '').trim().replace(/^openclaw\s*/i, '') || null;
+    const versionOutput = (vResult.stdout || '').trim().replace(/^openclaw\s*/i, '');
+    // Extract clean version (e.g. "2026.3.8") stripping commit hash like "2026.3.8 (3caab92)"
+    current = versionOutput.split(/\s/)[0] || null;
     steps.push('Current version: ' + (current || 'unknown'));
   } catch {
     steps.push('Could not determine current version');
@@ -1428,7 +1479,8 @@ app.post('/lite/api/upgrade', authMiddleware, async (req, res) => {
 
       // Verify base version is now active
       const verifyResult = await runCmd('--version');
-      const newVersion = (verifyResult.stdout || '').trim().replace(/^openclaw\s*/i, '');
+      const versionOut = (verifyResult.stdout || '').trim().replace(/^openclaw\s*/i, '');
+      const newVersion = versionOut.split(/\s/)[0] || '';
       steps.push('Active version: ' + (newVersion || 'unknown'));
 
       // Restart gateway
@@ -1485,7 +1537,8 @@ app.post('/lite/api/upgrade', authMiddleware, async (req, res) => {
 
     // Verify new version
     const verifyResult = await runCmd('--version');
-    const newVersion = (verifyResult.stdout || '').trim().replace(/^openclaw\s*/i, '');
+    const versionOut = (verifyResult.stdout || '').trim().replace(/^openclaw\s*/i, '');
+    const newVersion = versionOut.split(/\s/)[0] || '';
     steps.push('New version: ' + (newVersion || 'unknown'));
 
     // Restart gateway
@@ -1516,11 +1569,15 @@ const { middleware: proxyMiddleware, upgradeHandler } = createProxy(getGatewayTo
 // Protect all /openclaw paths (SPA, assets, API) with setup password
 app.use('/openclaw', authMiddleware);
 
-// Redirect /openclaw to include gateway token so the SPA can authenticate
+// Redirect /openclaw (and subpaths on refresh) to include gateway token so the SPA can authenticate
 const openclawHandler = (req, res, next) => {
-  // If token already in query, let the proxy serve the SPA
-  // (avoids redirect loop since Express 5 strict:false matches /openclaw/ too)
+  // If token already in query, let the proxy serve the request
   if (req.query.token) {
+    return next();
+  }
+  // Only redirect navigation requests (HTML pages), not assets/API/XHR
+  const acceptsHtml = req.headers.accept && req.headers.accept.includes('text/html');
+  if (!acceptsHtml) {
     return next();
   }
   if (!isGatewayRunning()) {
@@ -1530,11 +1587,15 @@ const openclawHandler = (req, res, next) => {
     });
   }
   const token = getGatewayToken();
-  res.redirect(`/openclaw/?token=${encodeURIComponent(token)}`);
+  // Preserve existing query params (e.g. ?session=...) and add token
+  const url = new URL(req.originalUrl, `http://${req.headers.host}`);
+  url.searchParams.set('token', token);
+  res.redirect(url.pathname + url.search);
 };
 
 app.get('/openclaw', openclawHandler);
 app.post('/openclaw', openclawHandler);
+app.get('/openclaw/{*path}', openclawHandler);  // catch subpath refreshes like /openclaw/chat?session=...
 
 // Proxy all other requests to gateway (when running)
 // Note: Using no path argument to avoid Express 5 stripping req.url
